@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Mise au carreau</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: sans-serif; background: #f5f5f2; color: #222; padding: 2rem; }
+  h1 { font-size: 18px; font-weight: 500; margin-bottom: 1.5rem; }
+  #drop-zone { border: 1.5px dashed #bbb; border-radius: 12px; padding: 2.5rem; text-align: center; cursor: pointer; color: #888; font-size: 14px; background: #fff; transition: background 0.2s; margin-bottom: 1.5rem; }
+  #drop-zone:hover, #drop-zone.drag-over { background: #eee; }
+  #canvas-wrap { position: relative; display: inline-block; max-width: 100%; margin-bottom: 1.5rem; }
+  canvas { display: block; max-width: 100%; border-radius: 8px; }
+  #grid-canvas { position: absolute; top: 0; left: 0; pointer-events: none; border-radius: 8px; }
+  .ctrl { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; font-size: 13px; color: #555; }
+  .ctrl label { min-width: 130px; }
+  .ctrl input[type=range] { flex: 1; }
+  .ctrl span { min-width: 40px; text-align: right; font-weight: 600; color: #111; }
+  .color-row { display: flex; align-items: center; gap: 10px; font-size: 13px; color: #555; margin-bottom: 10px; flex-wrap: wrap; }
+  .color-row label { min-width: 130px; }
+  input[type=color] { width: 36px; height: 28px; border: 0.5px solid #ccc; border-radius: 4px; padding: 2px; cursor: pointer; }
+  #controls { background: #fff; border-radius: 12px; padding: 1.25rem; border: 0.5px solid #ddd; margin-bottom: 1.5rem; }
+  button { padding: 9px 18px; border-radius: 8px; border: 0.5px solid #ccc; background: #fff; font-size: 13px; cursor: pointer; font-weight: 500; }
+  button:hover { background: #f0f0f0; }
+  #dl-box { margin-top: 14px; padding: 14px 16px; border-radius: 10px; border: 0.5px solid #ddd; background: #f9f9f7; font-size: 13px; color: #555; }
+  #dl-box a { display: inline-block; margin-top: 8px; font-size: 13px; font-weight: 500; color: #185fa5; text-decoration: underline; }
+  #status { font-size: 12px; color: #e55; margin-top: 8px; }
+</style>
+</head>
+<body>
+<h1>Mise au carreau</h1>
+
+<div id="drop-zone">
+  <div style="font-size: 32px; margin-bottom: 8px; opacity: 0.4;">+</div>
+  Cliquer ou déposer une image ici
+  <input type="file" id="file-input" accept="image/*" style="display:none">
+</div>
+
+<div id="canvas-wrap" style="display:none;">
+  <canvas id="img-canvas"></canvas>
+  <canvas id="grid-canvas"></canvas>
+</div>
+
+<div id="controls" style="display:none;">
+  <div class="ctrl"><label>Colonnes</label><input type="range" id="cols" min="2" max="40" value="10" step="1"><span id="cols-val">10</span></div>
+  <div class="ctrl"><label>Lignes</label><input type="range" id="rows" min="2" max="40" value="10" step="1"><span id="rows-val">10</span></div>
+  <div class="ctrl"><label>Opacité grille</label><input type="range" id="opacity" min="0.05" max="1" step="0.05" value="0.5"><span id="opacity-val">0.50</span></div>
+  <div class="ctrl"><label>Épaisseur trait</label><input type="range" id="lw" min="0.5" max="4" step="0.5" value="1"><span id="lw-val">1px</span></div>
+  <div class="color-row">
+    <label>Couleur grille</label><input type="color" id="grid-color" value="#ff0000">
+    <label style="margin-left:16px;">Numéros</label><input type="color" id="num-color" value="#ff0000">
+    <label style="margin-left:8px; min-width:auto;"><input type="checkbox" id="show-nums" checked style="margin-right:4px;">afficher</label>
+  </div>
+  <button id="generate-btn">Générer le lien de téléchargement ↗</button>
+  <div id="dl-box" style="display:none">
+    Image prête — clique sur le lien pour l'ouvrir, puis clic droit → Enregistrer sous :<br>
+    <a id="open-link" target="_blank">Ouvrir l'image dans un nouvel onglet ↗</a>
+  </div>
+  <div id="status"></div>
+</div>
+
+<script>
+  let img = null;
+  let objectURL = null;
+  const imgCanvas = document.getElementById('img-canvas');
+  const gridCanvas = document.getElementById('grid-canvas');
+  const imgCtx = imgCanvas.getContext('2d');
+  const gridCtx = gridCanvas.getContext('2d');
+  const wrap = document.getElementById('canvas-wrap');
+  const controls = document.getElementById('controls');
+  const dropZone = document.getElementById('drop-zone');
+  const status = document.getElementById('status');
+
+  // Click on drop zone
+  dropZone.addEventListener('click', () => document.getElementById('file-input').click());
+  document.getElementById('file-input').addEventListener('change', e => {
+    if (e.target.files[0]) loadImage(e.target.files[0]);
+  });
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    if (e.dataTransfer.files[0]) loadImage(e.dataTransfer.files[0]);
+  });
+
+  function loadImage(file) {
+    if (!file.type.startsWith('image/')) { status.textContent = 'Fichier non supporté.'; return; }
+    status.textContent = '';
+    if (objectURL) URL.revokeObjectURL(objectURL);
+    objectURL = URL.createObjectURL(file);
+    img = new Image();
+    img.onload = () => {
+      const maxW = Math.min(img.naturalWidth, 1200);
+      const scale = maxW / img.naturalWidth;
+      const W = Math.round(img.naturalWidth * scale);
+      const H = Math.round(img.naturalHeight * scale);
+      imgCanvas.width = gridCanvas.width = W;
+      imgCanvas.height = gridCanvas.height = H;
+      imgCtx.clearRect(0, 0, W, H);
+      imgCtx.drawImage(img, 0, 0, W, H);
+      wrap.style.display = 'inline-block';
+      controls.style.display = 'block';
+      dropZone.style.display = 'none';
+      document.getElementById('dl-box').style.display = 'none';
+      drawGrid();
+    };
+    img.onerror = () => { status.textContent = "Erreur de chargement de l'image."; };
+    img.src = objectURL;
+  }
+
+  function drawGrid() {
+    if (!img) return;
+    const cols = parseInt(document.getElementById('cols').value);
+    const rows = parseInt(document.getElementById('rows').value);
+    const opacity = parseFloat(document.getElementById('opacity').value);
+    const lw = parseFloat(document.getElementById('lw').value);
+    const color = document.getElementById('grid-color').value;
+    const numColor = document.getElementById('num-color').value;
+    const showNums = document.getElementById('show-nums').checked;
+    const W = gridCanvas.width, H = gridCanvas.height;
+    const cw = W / cols, ch = H / rows;
+
+    gridCtx.clearRect(0, 0, W, H);
+    gridCtx.globalAlpha = opacity;
+    gridCtx.strokeStyle = color;
+    gridCtx.lineWidth = lw;
+    for (let c = 0; c <= cols; c++) {
+      const x = Math.round(c * cw);
+      gridCtx.beginPath(); gridCtx.moveTo(x, 0); gridCtx.lineTo(x, H); gridCtx.stroke();
+    }
+    for (let r = 0; r <= rows; r++) {
+      const y = Math.round(r * ch);
+      gridCtx.beginPath(); gridCtx.moveTo(0, y); gridCtx.lineTo(W, y); gridCtx.stroke();
+    }
+    if (showNums) {
+      const fs = Math.max(9, Math.min(16, Math.floor(Math.min(cw, ch) * 0.35)));
+      gridCtx.globalAlpha = Math.min(1, opacity + 0.2);
+      gridCtx.fillStyle = numColor;
+      gridCtx.font = `bold ${fs}px sans-serif`;
+      gridCtx.textAlign = 'center';
+      gridCtx.textBaseline = 'middle';
+      let n = 1;
+      for (let r = 0; r < rows; r++)
+        for (let c = 0; c < cols; c++) {
+          gridCtx.fillText(n, Math.round(c * cw + cw / 2), Math.round(r * ch + ch / 2));
+          n++;
+        }
+    }
+    document.getElementById('dl-box').style.display = 'none';
+  }
+
+  ['cols','rows','opacity','lw','grid-color','num-color','show-nums'].forEach(id => {
+    document.getElementById(id).addEventListener('input', () => {
+      if (id === 'cols') document.getElementById('cols-val').textContent = document.getElementById('cols').value;
+      if (id === 'rows') document.getElementById('rows-val').textContent = document.getElementById('rows').value;
+      if (id === 'opacity') document.getElementById('opacity-val').textContent = parseFloat(document.getElementById('opacity').value).toFixed(2);
+      if (id === 'lw') document.getElementById('lw-val').textContent = document.getElementById('lw').value + 'px';
+      drawGrid();
+    });
+  });
+
+  document.getElementById('generate-btn').addEventListener('click', function () {
+    if (!img) return;
+    status.textContent = 'Génération…';
+    const out = document.createElement('canvas');
+    out.width = imgCanvas.width;
+    out.height = imgCanvas.height;
+    const ctx = out.getContext('2d');
+    ctx.drawImage(imgCanvas, 0, 0);
+    ctx.drawImage(gridCanvas, 0, 0);
+    const dataURL = out.toDataURL('image/png');
+
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Mise au carreau</title>
+<style>body{margin:0;background:#111;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;font-family:sans-serif;color:#eee;gap:16px;}
+img{max-width:95vw;max-height:80vh;display:block;border-radius:6px;}
+a{padding:10px 24px;background:#fff;color:#111;border-radius:8px;text-decoration:none;font-size:14px;font-weight:500;}
+a:hover{background:#e0e0e0;}p{font-size:12px;color:#777;}</style></head>
+<body><img src="${dataURL}">
+<a href="${dataURL}" download="mise_au_carreau.png">Télécharger l'image</a>
+<p>Ou clic droit sur l'image → Enregistrer sous</p></body></html>`;
+
+    const blob = new Blob([html], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const link = document.getElementById('open-link');
+    link.href = url;
+    document.getElementById('dl-box').style.display = 'block';
+    status.textContent = '';
+  });
+</script>
+</body>
+</html>
